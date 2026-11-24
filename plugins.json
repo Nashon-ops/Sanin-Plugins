@@ -1,0 +1,40 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/Nashon-ops/Sanin-Plugins/builds/AniPM.cs3",
+        "status": 1,
+        "version": 1,
+        "name": "AniPM",
+        "internalName": "AniPM",
+        "authors": [
+            "Nashon-ops"
+        ],
+        "description": "AniPM anime provider",
+        "fileSize": 39360,
+        "repositoryUrl": "https://github.com/Nashon-ops/Sanin-Plugins",
+        "language": "en",
+        "tvTypes": [
+            "Anime"
+        ],
+        "iconUrl": "https://ani.pm/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-a54f38e8ef82a950f885d2b994d31e15c22d761d0fb9a5a46e44fba96c2b80ea"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/Nashon-ops/Sanin-Plugins/builds/ExampleProvider.cs3",
+        "status": 1,
+        "version": 1,
+        "name": "ExampleProvider",
+        "internalName": "ExampleProvider",
+        "authors": [
+            "Cloudburst"
+        ],
+        "description": "Lorem Ipsum",
+        "fileSize": 2239,
+        "repositoryUrl": "https://github.com/Nashon-ops/Sanin-Plugins",
+        "tvTypes": [
+            "Others"
+        ],
+        "apiVersion": 1,
+        "fileHash": "sha256-b1e8fe98d03cf940b397e3e4ce4845a730a0a21beed747c34c70be46ae1d81ac"
+    }
+]
