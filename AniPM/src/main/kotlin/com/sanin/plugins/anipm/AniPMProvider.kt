@@ -22,64 +22,57 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import java.net.URLEncoder
-
-private data class SettlarStream(
-    val source: String,
-    val subtitles: List<Pair<String, String>>,
-)
 
 object AniPMApi {
     private const val SETTLAR_EMBED = "https://embed.settlar.io"
     private val domains = listOf("https://ani.pm", "https://ani.nz", "https://ani.vg")
-    private val json = Json { ignoreUnknownKeys = true }
 
     @Volatile
     private var domainIndex = 0
 
-    val userAgent =
+    const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     fun url(): String = domains[domainIndex]
 
     private fun headers(referer: String): Map<String, String> = mapOf(
-        "User-Agent" to userAgent,
+        "User-Agent" to USER_AGENT,
         "Accept" to "application/json, text/plain, */*",
         "Referer" to referer,
     )
+
+    private suspend fun getJson(url: String, referer: String): String? = try {
+        val response = app.get(
+            url,
+            headers = headers(referer),
+            timeout = 30_000L,
+        )
+        response.text.takeIf { response.code == 200 && it.isNotBlank() }
+    } catch (_: Exception) {
+        null
+    }
 
     private suspend fun getText(path: String): String? {
         domains.indices.forEach { offset ->
             val index = (domainIndex + offset) % domains.size
             val base = domains[index]
-            try {
-                val response = app.get(
-                    base + path,
-                    headers = headers("$base/"),
-                    timeout = 30_000L,
-                )
-                val body = response.text
-                if (response.code == 200 && body.isNotBlank()) {
-                    domainIndex = index
-                    return body
-                }
-            } catch (_: Exception) {
-            }
+            val body = getJson(base + path, "$base/") ?: return@forEach
+            domainIndex = index
+            return body
         }
         return null
     }
 
-    private suspend fun getObject(path: String): JsonObject? {
+    private suspend inline fun <reified T : Any> getPathObject(path: String): T? {
         val body = getText(path) ?: return null
-        return runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+        return runCatching { parseJson<T>(body) }.getOrNull()
     }
 
-    private fun JsonObject.text(name: String): String? = (this[name] as? JsonPrimitive)?.contentOrNull
+    private suspend inline fun <reified T : Any> getObject(url: String, referer: String): T? {
+        val body = getJson(url, referer) ?: return null
+        return runCatching { parseJson<T>(body) }.getOrNull()
+    }
 
     fun absolute(url: String?): String? {
         if (url.isNullOrBlank()) return null
@@ -101,9 +94,9 @@ object AniPMApi {
         return runCatching { parseJson<AniPMListResponse>(body) }.getOrNull()
     }
 
-    suspend fun latest(page: Int): AniPMListResponse? {
+    suspend fun latest(page: Int): AniPMLatestResponse? {
         val body = getText("/api/anime/latest-episodes?page=$page") ?: return null
-        return runCatching { parseJson<AniPMListResponse>(body) }.getOrNull()
+        return runCatching { parseJson<AniPMLatestResponse>(body) }.getOrNull()
     }
 
     suspend fun series(id: Int): AniPMSeries? {
@@ -117,55 +110,28 @@ object AniPMApi {
         episode: Int,
         channel: String,
     ): String? {
-        val primary = getObject(
+        val primary = getPathObject<AniPMBootstrap>(
             "/api/anime/playback-bootstrap/settlar/$seriesId?ep=$episode&lang=$channel&backup=1"
-        )?.text("settlarSelection")?.takeIf { it.isNotBlank() }
+        )?.settlarSelection?.takeIf { it.isNotBlank() }
         if (!primary.isNullOrBlank()) return primary
         if (anilistId.isNullOrBlank()) return null
-        return getObject(
+        return getPathObject<AniPMBootstrap>(
             "/api/anime/playback-bootstrap/anilist/$anilistId?ep=$episode&lang=$channel&core=0"
-        )?.text("settlarSelection")?.takeIf { it.isNotBlank() }
+        )?.settlarSelection?.takeIf { it.isNotBlank() }
     }
 
     suspend fun settlarSession(selection: String, episode: Int, channel: String): String? {
-        val body = getText(
-            "/api/anime/settlar/session?selection=${encode(selection)}" +
-                "&provider=anipm&ep=$episode&channel=$channel&telemetry=0"
-        ) ?: return null
-        return runCatching { json.parseToJsonElement(body) as? JsonObject }
-            .getOrNull()
-            ?.text("embedUrl")
-            ?.takeIf { it.startsWith("http") }
+        val path = "/api/anime/settlar/session?selection=${encode(selection)}" +
+            "&provider=anipm&ep=$episode&channel=$channel&telemetry=0"
+        return getPathObject<AniPMEmbedSession>(path)?.embedUrl?.takeIf { it.startsWith("http") }
     }
 
     suspend fun settlarResolve(embedUrl: String): SettlarStream? {
         val token = Regex("t=([^&]+)").find(embedUrl)?.groupValues?.getOrNull(1) ?: return null
-        val response = try {
-            app.get(
-                "$SETTLAR_EMBED/api/embed/session?t=$token",
-                headers = headers("$SETTLAR_EMBED/embed/v1"),
-                timeout = 30_000L,
-            )
-        } catch (_: Exception) {
-            return null
-        }
-        if (response.code != 200) return null
-        val obj = runCatching { json.parseToJsonElement(response.text) as? JsonObject }.getOrNull()
-            ?: return null
-        val source = obj.text("source")?.takeIf { it.startsWith("https://") } ?: return null
-        val subtitles = mutableListOf<Pair<String, String>>()
-        (obj["subtitles"] as? JsonArray)?.forEach { element ->
-            val track = element as? JsonObject ?: return@forEach
-            val useAss = track.text("pick") == "ass"
-            val url = if (useAss) track.text("assUrl") else track.text("url")
-            if (url.isNullOrBlank() || !url.startsWith("https://")) return@forEach
-            val label = track.text("srclang")
-                ?.takeIf { it.isNotBlank() }
-                ?: track.text("label")
-                ?: "Subtitle"
-            subtitles.add(label to url)
-        }
-        return SettlarStream(source, subtitles)
+        return getObject<SettlarStream>(
+            "$SETTLAR_EMBED/api/embed/session?t=$token",
+            "$SETTLAR_EMBED/embed/v1",
+        )
     }
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
@@ -239,8 +205,7 @@ class AniPMProvider : MainAPI() {
 
     override suspend fun load(url: String): com.lagradost.cloudstream3.LoadResponse? {
         mainUrl = AniPMApi.url()
-        val parts = url.split("|")
-        val id = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        val id = url.substringAfterLast("|").trim().toIntOrNull() ?: return null
         val series = AniPMApi.series(id) ?: return null
         val title = series.title?.takeIf { it.isNotBlank() } ?: return null
 
@@ -251,8 +216,10 @@ class AniPMProvider : MainAPI() {
             series.episodes.orEmpty().mapNotNull { episode ->
                 val number = episode.number ?: return@mapNotNull null
                 if (number < 1) return@mapNotNull null
-                if (if (channel == "dub") episode.dub != true else episode.sub != true) return@mapNotNull null
-                newEpisode(episodeData(number, channel), fix = false) {
+                if (if (channel == "dub") episode.dub != true else episode.sub != true) {
+                    return@mapNotNull null
+                }
+                newEpisode(episodeData(number, channel)) {
                     this.name = episode.title
                         ?.takeIf { it.isNotBlank() && !Regex("""^Episode \d+(\.\d+)?$""").matches(it) }
                         ?: "Episode $number"
@@ -304,9 +271,10 @@ class AniPMProvider : MainAPI() {
             ?: return false
         val embedUrl = AniPMApi.settlarSession(selection, episode, channel) ?: return false
         val stream = AniPMApi.settlarResolve(embedUrl) ?: return false
+        val master = stream.source?.takeIf { it.startsWith("https://") } ?: return false
 
         val headers = mapOf(
-            "User-Agent" to AniPMApi.userAgent,
+            "User-Agent" to AniPMApi.USER_AGENT,
             "Referer" to "https://embed.settlar.io/",
         )
         val seenSubtitles = HashSet<String>()
@@ -316,14 +284,20 @@ class AniPMProvider : MainAPI() {
             "kor" to "ko", "zho" to "zh", "chi" to "zh", "ara" to "ar", "ind" to "id",
             "tha" to "th", "tur" to "tr", "vie" to "vi", "may" to "ms", "msa" to "ms",
         )
-        stream.subtitles.forEach { (label, url) ->
-            if (!seenSubtitles.add(url)) return@forEach
+        stream.subtitles.orEmpty().forEach { sub ->
+            val url = if (sub.pick == "ass") sub.assUrl else sub.url
+            if (url.isNullOrBlank() || !url.startsWith("https://") || !seenSubtitles.add(url)) {
+                return@forEach
+            }
+            val label = sub.srclang?.takeIf { it.isNotBlank() }
+                ?: sub.label?.takeIf { it.isNotBlank() }
+                ?: "Subtitle"
             val code = label.lowercase()
             subtitleCallback(newSubtitleFile(languageMap[code] ?: code.ifBlank { "und" }, url))
         }
 
         callback(
-            newExtractorLink(name, "$name ${channel.uppercase()}", stream.source, ExtractorLinkType.M3U8) {
+            newExtractorLink(name, "$name ${channel.uppercase()}", master, ExtractorLinkType.M3U8) {
                 referer = "https://embed.settlar.io/"
                 this.headers = headers
             }
