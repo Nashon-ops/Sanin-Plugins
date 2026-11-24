@@ -3,6 +3,6 @@
   "description": "CS3 provider plugins for Sanin/Orochimaru",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/Nashon-ops/Sanin-Plugins/builds/plugins.json"
+    "https://raw.githubusercontent.com/Nashon-ops/Sanin-Plugins/builds/plugins.json?v=2"
   ]
 }
